@@ -1,0 +1,76 @@
+---
+- name: SSH Key Generation and Security Configuration
+  hosts: all
+  become: yes
+  tasks:
+    # 1. 로컬에 SSH 키 생성 (Ansible 관리 노드)
+    - name: Check SSH private key exists
+      stat:
+        path: "~/.ssh/id_rsa"
+      register: ssh_key  #만약 경로에 id_rsa가 존재한다면 ssh_key.stat.exist 변수에 true 값이 저장
+
+    - name: Generate new SSH key pair if it doesn't exist
+      command: ssh-keygen -t rsa -b 4096 -f ~/.ssh/id_rsa -N "" # -N "" 패스프라이즈(키 생성시 관련 인증정보 묻는것)를 생략
+      when: not ssh_key.stat.exists
+
+    - name: Read the generated public key
+      slurp:
+        src: "~/.ssh/id_rsa.pub"
+      register: public_key
+
+    # 2. 공개 키를 원격 서버에 배포
+    - name: Ensure .ssh directory exists on remote server
+      file:
+        path: "~/.ssh"
+        state: directory
+        mode: '0700'
+
+    - name: Add public key to remote server's authorized_keys
+      lineinfile:
+        path: "~/.ssh/authorized_keys"
+        line: "{{ public_key['content'] | b64decode }}"
+        create: yes
+        mode: '0600'
+
+    # 3. SSH 보안 설정 업데이트
+    - name: Disable SSH password authentication
+      lineinfile:
+        path: "/etc/ssh/sshd_config"
+        regexp: "^#?PasswordAuthentication"
+        line: "PasswordAuthentication no"
+        create: yes
+      notify: Restart SSH
+
+    - name: Disable root login via SSH
+      lineinfile:
+        path: "/etc/ssh/sshd_config"
+        regexp: "^#?PermitRootLogin"
+        line: "PermitRootLogin no"
+        create: yes
+      notify: Restart SSH
+
+    # 4. SSH 재시작
+    - name: Restart SSH service
+      service:
+        name: sshd
+        state: restarted
+      when: ansible_facts['os_family'] == 'RedHat'
+
+    - name: Restart OpenSSH service (for Debian/Ubuntu)
+      service:
+        name: ssh
+        state: restarted
+      when: ansible_facts['os_family'] == 'Debian'
+
+  handlers:
+    - name: Restart SSH
+      service:
+        name: sshd
+        state: restarted
+      when: ansible_facts['os_family'] == 'RedHat'
+
+    - name: Restart OpenSSH
+      service:
+        name: ssh
+        state: restarted
+      when: ansible_facts['os_family'] == 'Debian'
