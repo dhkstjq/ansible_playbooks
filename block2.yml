@@ -1,20 +1,20 @@
 ---
 - name: block_Ex
-   gather_facts: no
-   hosts: localhost
-   become: true
-
-   tasks:
-    - name: Add host
-      blockinfile:
-        path: /etc/ansible/hosts
-        marker: "#{mark}사용하고 싶은 주석 내용"
-        block: |
-         [centOS]
-         110.45.168.212
-         [ubuntu]
-         110.45.168.213
-         [gabia]
-         111.111.111.111
-         [dump]
-         111.111.222.222
+  gather_facts: no
+  hosts: localhost
+  become: true
+  
+  tasks:
+   - name: Add host
+   blockinfile:
+    path: /etc/ansible/hosts
+    marker: "#{mark}사용하고 싶은 주석 내용"
+    block: |
+    [centOS]
+    110.45.168.212
+    [ubuntu]
+    110.45.168.213
+    [gabia]
+    111.111.111.111
+    [dump]
+    111.111.222.222
