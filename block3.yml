@@ -6,7 +6,7 @@
   
   tasks:
    - name: Add host
-    blockinfile:
+     blockinfile:
       path: /etc/ansible/hosts
       marker: "#{mark}사용하고 싶은 주석 내용"
       block: |
