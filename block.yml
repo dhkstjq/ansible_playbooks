@@ -1,7 +1,8 @@
 ---
 - name: block_Ex
   gather_facts: no
-  hosts: localhost
+  become: true
+
   
   tasks:
    - name: Add host
