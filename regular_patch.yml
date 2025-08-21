@@ -65,30 +65,31 @@
       failed_when: false
       when: ansible_facts.os_family == "Debian"
 
-    - name: Flag upgrades (Debian)   # 업그레이드가 가능하다면 경고창 띄우는건데 @@@@@@뺴도 될것같음@@@@@@@
-      ansible.builtin.set_fact: 
-        alerts: "{{ alerts + ['[SECURITY] Debian upgrades available. Review & patch.'] }}"
-      when:
-        - ansible_facts.os_family == "Debian"
-        - deb_up.stdout is search('upgraded,')  # apt 시뮬 결과에 요약 포함
+#    - name: Flag upgrades (Debian)   # 업그레이드가 가능하다면 경고창 띄우는건데 @@@@@@뺴도 될것같음@@@@@@@
+#      ansible.builtin.set_fact: 
+#        alerts: "{{ alerts + ['[SECURITY] Debian upgrades available. Review & patch.'] }}"
+#      when:
+#        - ansible_facts.os_family == "Debian"
+#        - deb_up.stdout is search('upgraded,')  # apt 시뮬 결과에 요약 포함
 
     # (선택) 재부팅 필요 여부     
     # ssh, 커널등 업데이트 후 적용을 위해 서버 재시작이 필요한 경우 /var/run 경로에 파일이 생긴다고함 생겨도 재시작하면 다시 자동으로 사라지기 때문에 굳이 넣을 필요는 없는 것 같음
-    - name: Ubuntu reboot-required
-      ansible.builtin.stat:
-        path: /var/run/reboot-required
-      register: reboot_req
-      when: ansible_facts.distribution == "Ubuntu"
+    #- name: Ubuntu reboot-required
+    #  ansible.builtin.stat:
+    #    path: /var/run/reboot-required
+    #  register: reboot_req
+    #  when: ansible_facts.distribution == "Ubuntu"
 
-    - name: Flag reboot-required
-      ansible.builtin.set_fact:
-        alerts: "{{ alerts + ['[KERNEL] Reboot required after updates.'] }}"
-      when: reboot_req.stat.exists | default(false)
+    #- name: Flag reboot-required
+    #  ansible.builtin.set_fact:
+    #    alerts: "{{ alerts + ['[KERNEL] Reboot required after updates.'] }}"
+    #  when: reboot_req.stat.exists | default(false)
 
     # 2) SSL 인증서 만료일
-    - name: Collect SSL notAfter
-      ansible.builtin.shell: |
-        set -o pipefail
+    - name: Collect SSL notAfter 
+      ansible.builtin.shell: | 
+        set -o pipefail   # 밑에가 파이프라인으로 한번에 여러 명령을 실행하는 구간인데 이때 원래 파이프 라인은 중간 명령이 실패 했든 성공했든 마지막 명령을 기준으로 성공 실패 기준값을 
+        #반환한다. 때문에 중간에 실패한 명령어가 있어도 알 수가 없기 때문에 set -o pipefail 명령을 사용하면 중간에 명령이 실패하면 그 실패한 명령에 대해 반환 하기 때문에 해결된다.
         timeout 5 openssl s_client -servername {{ item.host }} -connect {{ item.host }}:{{ item.port }} < /dev/null 2>/dev/null \
           | openssl x509 -noout -enddate | cut -d= -f2
       args: { executable: /bin/bash }
