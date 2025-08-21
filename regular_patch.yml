@@ -65,8 +65,8 @@
       failed_when: false
       when: ansible_facts.os_family == "Debian"
 
-    - name: Flag upgrades (Debian)
-      ansible.builtin.set_fact:
+    - name: Flag upgrades (Debian)   # 업그레이드가 가능하다면 경고창 띄우는건데 @@@@@@뺴도 될것같음@@@@@@@
+      ansible.builtin.set_fact: 
         alerts: "{{ alerts + ['[SECURITY] Debian upgrades available. Review & patch.'] }}"
       when:
         - ansible_facts.os_family == "Debian"
