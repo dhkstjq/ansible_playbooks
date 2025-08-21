@@ -138,12 +138,12 @@
 
     - name: Flag memory high
       ansible.builtin.set_fact:
-        alerts: "{{ alerts + [ '[MEM] Usage ' ~ (mem_used_pct | round(1)) ~ '%'] }}"
+        alerts: "{{ alerts + [ '[MEM] Usage ' ~ (mem_used_pct | float | round(1)) ~ '%'] }}"
       when: mem_used_pct | float >= mem_warn_pct
 
     - name: Flag swap high
       ansible.builtin.set_fact:
-        alerts: "{{ alerts + [ '[SWAP] Usage ' ~ (swap_used_pct | round(1)) ~ '%'] }}"
+        alerts: "{{ alerts + [ '[SWAP] Usage ' ~ (swap_used_pct | float | round(1)) ~ '%'] }}"
       when: swap_used_pct | float >= swap_warn_pct
 
     # 5) CPU Load Average (코어 대비)
