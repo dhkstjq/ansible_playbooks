@@ -152,10 +152,17 @@
       register: la
       changed_when: false
 
+    #- name: Flag high load
+    #  ansible.builtin.set_fact:
+    #    alerts: "{{ alerts + [ '[LOAD] 1m ' ~ (la.stdout | float) ~ ' (> ' ~ (cpu_cores*load_warn_per_core) ~ ')' ] }}"
+    #  when: (la.stdout | float) > (cpu_cores * load_warn_per_core)
+
     - name: Flag high load
       ansible.builtin.set_fact:
-        alerts: "{{ alerts + [ '[LOAD] 1m ' ~ (la.stdout | float) ~ ' (> ' ~ (cpu_cores*load_warn_per_core) ~ ')' ] }}"
-      when: (la.stdout | float) > (cpu_cores * load_warn_per_core)
+       alerts: "{{ alerts + [ '[LOAD] 1m ' ~ (la.stdout | float) ~ ' (> ' ~ (((cpu_cores | float) * (load_warn_per_core | float)) | float) ~ ')' ] }}"
+      when: (la.stdout | float) > ((cpu_cores | float) * (load_warn_per_core | float))
+
+
 
     # 6) 핵심 서비스 상태
     - name: Check essential services
