@@ -231,3 +231,36 @@
       ansible.builtin.debug:
         msg: "=== {{ inventory_hostname }}: All checks passed. ==="
       when: alerts | length == 0
+
+  post_tasks:
+  # 1) 호스트별 요약 텍스트 생성
+  - name: Build per-host summary text
+    ansible.builtin.set_fact:
+      report_text: |
+        === Infra Health Summary: {{ inventory_hostname }} ===
+        OS        : {{ ansible_facts.distribution }} {{ ansible_facts.distribution_version }} ({{ ansible_facts.os_family }})
+        Kernel    : {{ ansible_facts.kernel }}
+        CPU Cores : {{ cpu_cores | int }}
+        Load(1m)  : {{ (la.stdout | default('N/A')) }}
+        Memory    : {{ (mem_used_pct | float | round(1)) }}%   Swap: {{ (swap_used_pct | float | round(1)) }}%
+        Alerts:
+        {% if alerts | length > 0 %}
+        - {{ (alerts | unique) | join('\n- ') }}
+        {% else %}
+        - (none)
+        {% endif %}
+
+  # 2) 콘솔에 최종 요약만 출력
+  - name: Print final summary (one block per host)
+    ansible.builtin.debug:
+      msg: "{{ report_text }}"
+
+  # 3) 원격 호스트에 파일로 저장(옵션)
+  - name: Save per-host summary to file on target (optional)
+    ansible.builtin.copy:
+      content: "{{ report_text }}"
+      dest: "/var/tmp/health_report_{{ inventory_hostname }}.txt"
+      mode: '0644'
+
+
+
