@@ -16,21 +16,21 @@
     - name: Read the generated public key
       slurp:
         src: "~/.ssh/id_rsa.pub"
-      register: public_key
+      register: public_key   # 보안상의 이슈로 파일 base64로 인코딩 (JSON은 base64를 표준적으로 씀)
 
     # 2. 공개 키를 원격 서버에 배포
     - name: Ensure .ssh directory exists on remote server
       file:
         path: "~/.ssh"
         state: directory
-        mode: '0700'
+        mode: '0700'           # ssh 보관 경로가 제대로 있는지 확인 후 권한 700으로 부여
 
     - name: Add public key to remote server's authorized_keys
       lineinfile:
         path: "~/.ssh/authorized_keys"
         line: "{{ public_key['content'] | b64decode }}"
         create: yes
-        mode: '0600'
+        mode: '0600'     # 위에서 인코딩한 ssh 파일을 b64로 가져와서 디코딩 후 원본으로 저장
 
     # 3. SSH 보안 설정 업데이트
     - name: Disable SSH password authentication
