@@ -1,7 +1,7 @@
 ---
 - name: SSH Key Generation and Security Configuration
   hosts: all
-  become: yes
+  become: no
   tasks:
     # 1. 로컬에 SSH 키 생성 (Ansible 관리 노드)
     - name: Check SSH private key exists
