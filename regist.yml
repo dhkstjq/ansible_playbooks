@@ -6,7 +6,7 @@
   tasks:
    - name regist
      blockinfile:
-      path: /etc/ansible/hosts
+      path: ~/.ssh/autorized.key
       marker: "#{makr}"
       block: |
       ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICSWXIHcTuUKAENEd9Y/wF/1useiMJDoxJKY/8jnLM8m awx@awx-task-7dbcb447dc-62rj2
