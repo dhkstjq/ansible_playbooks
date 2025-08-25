@@ -105,7 +105,7 @@
       when: days_left <= ssl_warn_days
       debug:
         msg: "⚠️ {{ item.item.host }}: expires in {{ days_left }} days"
-      loop: "{{ ssl_results.results }}"
+      loop: "{{ ssl_dates.results }}"
 
   
     # 3) 디스크 사용률 / inode 사용률
