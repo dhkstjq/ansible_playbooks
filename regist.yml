@@ -1,0 +1,12 @@
+---
+- name: 공개키 등록 
+  gether_facts: no
+  become: no
+
+ tasks:
+  - name regist
+    blockinfile:
+     path: /etc/ansible/hosts
+     marker: "#{makr}"
+     block: |
+     ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICSWXIHcTuUKAENEd9Y/wF/1useiMJDoxJKY/8jnLM8m awx@awx-task-7dbcb447dc-62rj2
