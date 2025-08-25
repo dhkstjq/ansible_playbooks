@@ -1,12 +1,19 @@
 ---
-- name: 공개키 등록 
-  gether_facts: no
+- name: 각 노드에 공개키 등록
+  hosts: all
+  gather_facts: false
   become: no
 
+  vars:
+    # 키를 넣을 계정 (인벤토리에 ansible_user가 있으면 그 값 사용)
+    target_user: "{{ ansible_user | default('root') }}"
+    # 넣을 공개키 한 줄
+    awx_pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICSWXIHcTuUKAENEd9Y/wF/1useiMJDoxJKY/8jnLM8m awx@awx-task-7dbcb447dc-62rj2"
+
   tasks:
-   - name regist
-     blockinfile:
-      path: ~/.ssh/autorized.key
-      marker: "#{makr}"
-      block: |
-      ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICSWXIHcTuUKAENEd9Y/wF/1useiMJDoxJKY/8jnLM8m awx@awx-task-7dbcb447dc-62rj2
+    - name: 공개키를 authorized_keys에 추가
+      authorized_key:
+        user: "{{ target_user }}"
+        key: "{{ awx_pubkey }}"
+        state: present
+        manage_dir: true
