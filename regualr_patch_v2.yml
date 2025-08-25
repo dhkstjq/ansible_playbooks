@@ -8,7 +8,7 @@
   vars:
     # === 임계치 & 점검 대상 변수 ===
     ssl_targets:            # SSL 만료 확인 대상 (FQDN:PORT)
-      - { host: "example.com", port: 443 }
+      - { host: "wanduri.com", port: 443 }
     ssl_warn_days: 30       # SSL 만료 경고 임계(일)
 
     disk_warn_pct: 80       # 디스크 사용률 경고 임계(%)
