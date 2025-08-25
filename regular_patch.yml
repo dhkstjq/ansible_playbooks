@@ -99,13 +99,15 @@
       failed_when: false
 
     - name: Evaluate SSL expiries
-      ansible.builtin.set_fact:
-        alerts: "{{ alerts + [ '[SSL] ' ~ item.item.host ~ ':' ~ item.item.port ~ ' expires in ' ~ (( (item.stdout | to_datetime('%b %d %H:%M:%S %Y %Z')) | community.general.to_timestamp ) - (ansible_date_time.epoch | int) ) // 86400 ~ ' days' ] }}"
-      loop: "{{ ssl_dates.results | selectattr('stdout','defined') | list }}"
-      when:
-        - item.stdout | length > 0
-        - (((item.stdout | to_datetime('%b %d %H:%M:%S %Y %Z')) | community.general.to_timestamp ) - (ansible_date_time.epoch | int)) // 86400 <= ssl_warn_days
+      vars:
+        not_after_epoch: "{{ (item.stdout | to_datetime('%b %d %H:%M:%S %Y %Z')).strftime('%s') | int }}"
+        days_left: "{{ (not_after_epoch - (ansible_date_time.epoch | int)) // 86400 }}"
+      when: days_left <= ssl_warn_days
+      debug:
+        msg: "⚠️ {{ item.item.host }}: expires in {{ days_left }} days"
+      loop: "{{ ssl_results.results }}"
 
+  
     # 3) 디스크 사용률 / inode 사용률
     - name: Disk usage check via ansible_mounts
       ansible.builtin.set_fact:
