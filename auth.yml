@@ -1,0 +1,40 @@
+---
+# file: distribute_awx_pubkey.yml
+- name: Push AWX public key to target nodes
+  hosts: all
+  gather_facts: false
+  become: true
+
+  vars:
+    pubkey_path: "/var/lib/awx/.ssh/id_ed25519_awx.pub"   # AWX(컨트롤러/EE) 내부 경로
+    target_user: "{{ ansible_user | default('root') }}"   # 대상 서버에 키를 넣을 계정
+
+  pre_tasks:
+    - name: Read public key from controller
+      slurp:
+        src: "{{ pubkey_path }}"
+      register: pub
+      delegate_to: localhost
+      run_once: true
+
+    - name: Prepare pubkey string
+      set_fact:
+        awx_pubkey: "{{ pub.content | b64decode | trim }}"
+      run_once: true
+      delegate_to: localhost
+
+  tasks:
+    - name: Ensure .ssh exists
+      file:
+        path: "~{{ target_user }}/.ssh"
+        state: directory
+        mode: '0700'
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+
+    - name: Install AWX public key
+      authorized_key:
+        user: "{{ target_user }}"
+        key: "{{ awx_pubkey }}"
+        state: present
+        manage_dir: true
