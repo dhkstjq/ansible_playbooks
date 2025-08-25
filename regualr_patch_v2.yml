@@ -1,0 +1,253 @@
+---
+# file: regular_patch.yml (or site-maintenance.yml)
+- name: Regular Infra Health Check
+  hosts: all
+  gather_facts: true
+  become: true
+
+  vars:
+    # === 임계치 & 점검 대상 변수 ===
+    ssl_targets:            # SSL 만료 확인 대상 (FQDN:PORT)
+      - { host: "example.com", port: 443 }
+    ssl_warn_days: 30       # SSL 만료 경고 임계(일)
+
+    disk_warn_pct: 80       # 디스크 사용률 경고 임계(%)
+    inode_warn_pct: 80      # inode 사용률 경고 임계(%)
+
+    mem_warn_pct: 90        # Mem 사용률(%)
+    swap_warn_pct: 20       # Swap 사용률(%)
+
+    load_warn_per_core: 1.0 # 1분 LoadAvg 임계(코어당)
+
+    must_services:          # 핵심 서비스 상태 확인
+      - sshd
+      # - nginx
+      # - mariadb
+
+    must_ports:             # 필수 리슨 포트 확인
+      - 22
+      # - 80
+      # - 443
+
+    log_grep_patterns: '(error|failed|segfault|panic)'
+    log_tail_lines: 500
+
+  pre_tasks:
+    - name: Init alert bucket
+      ansible.builtin.set_fact:
+        alerts: []
+
+    - name: Derive core count
+      ansible.builtin.set_fact:
+        cpu_cores: "{{ (ansible_facts.processor_vcpus | default(ansible_facts.processor_cores*ansible_facts.processor_count, true)) | int }}"
+
+  tasks:
+    # 1) OS 보안 업데이트 적용 여부
+    - name: Check security updates (RHEL family)
+      ansible.builtin.command: dnf updateinfo list security
+      register: rhel_sec
+      changed_when: false
+      failed_when: false
+      when: ansible_facts.os_family == "RedHat"
+
+    - name: Flag security updates (RHEL)
+      ansible.builtin.set_fact:
+        alerts: "{{ alerts + ['[SECURITY] RHEL security advisories available (' ~ (rhel_sec.stdout_lines|length) ~ ' lines). Review & patch.'] }}"
+      when:
+        - ansible_facts.os_family == "RedHat"
+        - rhel_sec.stdout is defined
+        - rhel_sec.stdout | length > 0
+
+    - name: Check upgrades (Debian family - simulation)
+      ansible.builtin.command: apt-get -s upgrade
+      register: deb_up
+      changed_when: false
+      failed_when: false
+      when: ansible_facts.os_family == "Debian"
+
+    # 2) SSL 인증서 만료일
+    - name: Collect SSL notAfter
+      ansible.builtin.shell: |
+        set -o pipefail
+        timeout 5 openssl s_client -servername {{ item.host }} -connect {{ item.host }}:{{ item.port }} < /dev/null 2>/dev/null \
+          | openssl x509 -noout -enddate | cut -d= -f2
+      args:
+        executable: /bin/bash
+      loop: "{{ ssl_targets }}"
+      register: ssl_dates
+      changed_when: false
+      failed_when: false
+
+    - name: Evaluate SSL expiries (print)
+      vars:
+        not_after_epoch: >-
+          {{ (item.stdout | to_datetime('%b %d %H:%M:%S %Y %Z')).strftime('%s') }}
+        days_left: >-
+          {{ (((not_after_epoch | int) - (ansible_date_time.epoch | int)) // 86400) | int }}
+      when:
+        - item.stdout is defined
+        - item.stdout | length > 0
+        - (days_left | int) <= (ssl_warn_days | int)
+      ansible.builtin.debug:
+        msg: "⚠️ {{ item.item.host }}: expires in {{ days_left | int }} days"
+      loop: "{{ ssl_dates.results | selectattr('stdout','defined') | list }}"
+
+    - name: Flag expiring certs into alerts
+      vars:
+        not_after_epoch: >-
+          {{ (item.stdout | to_datetime('%b %d %H:%M:%S %Y %Z')).strftime('%s') }}
+        days_left: >-
+          {{ (((not_after_epoch | int) - (ansible_date_time.epoch | int)) // 86400) | int }}
+      when:
+        - item.stdout is defined
+        - item.stdout | length > 0
+        - (days_left | int) <= (ssl_warn_days | int)
+      ansible.builtin.set_fact:
+        alerts: "{{ alerts + [ '[SSL] ' ~ item.item.host ~ ':' ~ item.item.port ~ ' expires in ' ~ (days_left | int) ~ ' days' ] }}"
+      loop: "{{ ssl_dates.results | selectattr('stdout','defined') | list }}"
+
+    # 3) 디스크 사용률 / inode 사용률
+    - name: Disk usage check via ansible_mounts
+      ansible.builtin.set_fact:
+        alerts: "{{ alerts + [ '[DISK] ' ~ m.mount ~ ' at ' ~ ((100 - (100.0*m.size_available/m.size_total)) | round(1) ) ~ '% used' ] }}"
+      loop: "{{ ansible_facts.mounts | default(ansible_facts.ansible_mounts, true) }}"
+      loop_control:
+        loop_var: m
+      when:
+        - m.fstype is defined
+        - m.fstype not in ['tmpfs','devtmpfs','squashfs']
+        - (100 - (100.0*m.size_available/m.size_total)) | float >= disk_warn_pct
+
+    - name: Inode usage check
+      ansible.builtin.shell: "df -Pi | awk 'NR>1{print $6, $5}'"
+      register: inode_df
+      changed_when: false
+
+    - name: Flag high inode usage
+      ansible.builtin.set_fact:
+        alerts: "{{ alerts + [ '[INODE] ' ~ item.split()[0] ~ ' at ' ~ item.split()[1] ] }}"
+      loop: "{{ inode_df.stdout_lines | default([]) }}"
+      when: "(item.split()[1] | regex_replace('%','') | int) >= inode_warn_pct"
+
+    # 4) 메모리/Swap 사용률
+    - name: Memory/Swap usage compute
+      ansible.builtin.set_fact:
+        mem_used_pct: "{{ 100 - (100.0 * ansible_facts.memfree_mb / ansible_facts.memtotal_mb) }}"
+        swap_used_pct: >-
+          {{ (ansible_facts.swaptotal_mb | int) == 0
+             | ternary(0, 100 - (100.0 * ansible_facts.swapfree_mb / ansible_facts.swaptotal_mb)) }}
+
+    - name: Flag memory high
+      ansible.builtin.set_fact:
+        alerts: "{{ alerts + [ '[MEM] Usage ' ~ (mem_used_pct | float | round(1)) ~ '%'] }}"
+      when: mem_used_pct | float >= mem_warn_pct
+
+    - name: Flag swap high
+      ansible.builtin.set_fact:
+        alerts: "{{ alerts + [ '[SWAP] Usage ' ~ (swap_used_pct | float | round(1)) ~ '%'] }}"
+      when: swap_used_pct | float >= swap_warn_pct
+
+    # 5) CPU Load Average (코어 대비)
+    - name: Read 1min loadavg
+      ansible.builtin.shell: "cut -d' ' -f1 /proc/loadavg"
+      register: la
+      changed_when: false
+
+    - name: Flag high load
+      ansible.builtin.set_fact:
+        alerts: "{{ alerts + [ '[LOAD] 1m ' ~ (la.stdout | float) ~ ' (> ' ~ (((cpu_cores | float) * (load_warn_per_core | float)) | float) ~ ')' ] }}"
+      when: (la.stdout | float) > ((cpu_cores | float) * (load_warn_per_core | float))
+
+    # 6) 핵심 서비스 상태
+    - name: Check essential services
+      ansible.builtin.shell: "systemctl is-active {{ item }}"
+      register: svc
+      changed_when: false
+      failed_when: false
+      loop: "{{ must_services }}"
+
+    - name: Flag inactive services
+      ansible.builtin.set_fact:
+        alerts: "{{ alerts + [ '[SERVICE] ' ~ item.item ~ ' is ' ~ item.stdout ] }}"
+      loop: "{{ svc.results }}"
+      when: item.rc != 0
+
+    # 7) 필수 포트 리슨 상태
+    - name: Check required listening ports
+      ansible.builtin.wait_for:
+        port: "{{ item }}"
+        state: started
+        timeout: 1
+      register: portchk
+      failed_when: false
+      loop: "{{ must_ports }}"
+
+    - name: Flag closed ports
+      ansible.builtin.set_fact:
+        alerts: "{{ alerts + [ '[PORT] ' ~ item.item ~ ' not listening' ] }}"
+      loop: "{{ portchk.results }}"
+      when: (item.state | default('started')) != 'started' or (item.failed | default(false))
+
+    # 8) 최근 로그 에러 스캔 (/var/log/messages, dmesg or journal)
+    - name: Tail messages (if exists)
+      ansible.builtin.shell: "test -f /var/log/messages && tail -n {{ log_tail_lines }} /var/log/messages | egrep -i '{{ log_grep_patterns }}' || true"
+      register: msglog
+      changed_when: false
+
+    - name: Scan dmesg recent errors
+      ansible.builtin.shell: "dmesg --ctime | tail -n {{ log_tail_lines }} | egrep -i '{{ log_grep_patterns }}' || true"
+      register: dmesglog
+      changed_when: false
+
+    - name: Scan journalctl sshd errors (if systemd)
+      ansible.builtin.shell: "command -v journalctl >/dev/null 2>&1 && journalctl -u sshd -n {{ log_tail_lines }} | egrep -i '{{ log_grep_patterns }}' || true"
+      register: journ
+      changed_when: false
+
+    - name: Flag log errors (condensed)
+      ansible.builtin.set_fact:
+        alerts: "{{ alerts + ['[LOG] Recent errors found in system logs'] }}"
+      when: >
+        (msglog.stdout | default('')) | length > 0
+        or (dmesglog.stdout | default('')) | length > 0
+        or (journ.stdout | default('')) | length > 0
+
+  post_tasks:
+    - name: Summary
+      ansible.builtin.debug:
+        msg:
+          - "=== Health Check Summary on {{ inventory_hostname }} ==="
+          - "OK (no alerts)"
+          - "{{ alerts }}"
+      when: alerts | length > 0
+
+    - name: No alerts message
+      ansible.builtin.debug:
+        msg: "=== {{ inventory_hostname }}: All checks passed. ==="
+      when: alerts | length == 0
+
+    - name: Build per-host summary text
+      ansible.builtin.set_fact:
+        report_text: |
+          === Infra Health Summary: {{ inventory_hostname }} ===
+          OS        : {{ ansible_facts.distribution }} {{ ansible_facts.distribution_version }} ({{ ansible_facts.os_family }})
+          Kernel    : {{ ansible_facts.kernel }}
+          CPU Cores : {{ cpu_cores | int }}
+          Load(1m)  : {{ (la.stdout | default('N/A')) }}
+          Memory    : {{ (mem_used_pct | float | round(1)) }}%   Swap: {{ (swap_used_pct | float | round(1)) }}%
+          Alerts:
+          {% if alerts | length > 0 %}
+          - {{ (alerts | unique) | join('\n- ') }}
+          {% else %}
+          - (none)
+          {% endif %}
+
+    - name: Print final summary (one block per host)
+      ansible.builtin.debug:
+        msg: "{{ report_text }}"
+
+    - name: Save per-host summary to file on target (optional)
+      ansible.builtin.copy:
+        content: "{{ report_text }}"
+        dest: "/var/tmp/health_report_{{ inventory_hostname }}.txt"
+        mode: '0644'
