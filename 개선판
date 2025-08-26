@@ -1,0 +1,150 @@
+---
+# file: infra_health_min.yml
+- name: Regular Infra Health Check (Slim)
+  hosts: all
+  gather_facts: true
+  become: true
+
+  vars:
+    ssl_targets:
+      - { host: "wanduri.com", port: 443 }
+    ssl_warn_days: 30
+
+    disk_warn_pct: 80
+
+    must_services:
+      - sshd
+      # - nginx
+      # - mariadb
+
+    must_ports:
+      - 22
+      - 443
+      - 8080
+
+  pre_tasks:
+    - name: Init alert bucket
+      ansible.builtin.set_fact:
+        alerts: []
+
+    - name: Derive core count (kept for future use)
+      ansible.builtin.set_fact:
+        cpu_cores: "{{ (ansible_facts.processor_vcpus | default(ansible_facts.processor_cores*ansible_facts.processor_count, true)) | int }}"
+
+  tasks:
+    # 1) OS 보안 업데이트 적용 여부
+    - name: Check security updates (RHEL family)
+      ansible.builtin.command: dnf updateinfo list security
+      register: rhel_sec
+      changed_when: false
+      failed_when: false
+      when: ansible_facts.os_family == "RedHat"
+
+    - name: Flag security updates (RHEL)
+      ansible.builtin.set_fact:
+        alerts: "{{ alerts + [ '[SECURITY] RHEL security advisories available: ' ~ (rhel_sec.stdout_lines | length) ~ ' item(s). Review & patch.' ] }}"
+      when:
+        - ansible_facts.os_family == "RedHat"
+        - rhel_sec.stdout_lines is defined
+        - (rhel_sec.stdout_lines | length) > 0
+
+    - name: Check upgrades (Debian family - simulation)
+      ansible.builtin.command: apt-get -s upgrade
+      register: deb_up
+      changed_when: false
+      failed_when: false
+      when: ansible_facts.os_family == "Debian"
+
+    - name: Count Debian upgradable & security lines
+      ansible.builtin.set_fact:
+        deb_inst_lines: "{{ (deb_up.stdout_lines | select('match', '^Inst ')) | list }}"
+        deb_total_upgrades: "{{ deb_inst_lines | length }}"
+        deb_security_upgrades: "{{ (deb_inst_lines | select('search', '-security')) | list | length }}"
+      when: ansible_facts.os_family == "Debian"
+
+    - name: Flag security updates (Debian)
+      ansible.builtin.set_fact:
+        alerts: "{{ alerts + [ '[SECURITY] Debian upgrades: ' ~ deb_total_upgrades ~ ' total, ' ~ deb_security_upgrades ~ ' security. Review & patch.' ] }}"
+      when:
+        - ansible_facts.os_family == "Debian"
+        - deb_total_upgrades | int > 0
+
+    # 2) SSL 인증서 만료일
+    - name: Collect SSL notAfter
+      ansible.builtin.shell: |
+        set -o pipefail
+        timeout 5 openssl s_client -servername {{ item.host }} -connect {{ item.host }}:{{ item.port }} < /dev/null 2>/dev/null \
+          | openssl x509 -noout -enddate | cut -d= -f2
+      args:
+        executable: /bin/bash
+      loop: "{{ ssl_targets }}"
+      register: ssl_dates
+      changed_when: false
+      failed_when: false
+
+    - name: Flag expiring certs into alerts
+      vars:
+        not_after_epoch: "{{ (item.stdout | to_datetime('%b %d %H:%M:%S %Y %Z')).strftime('%s') }}"
+        days_left: "{{ (((not_after_epoch | int) - (ansible_date_time.epoch | int)) // 86400) | int }}"
+      when:
+        - item.stdout is defined
+        - item.stdout | length > 0
+        - (days_left | int) <= (ssl_warn_days | int)
+      ansible.builtin.set_fact:
+        alerts: "{{ alerts + [ '[SSL] ' ~ item.item.host ~ ':' ~ item.item.port ~ ' expires in ' ~ (days_left | int) ~ ' days' ] }}"
+      loop: "{{ ssl_dates.results | selectattr('stdout','defined') | list }}"
+
+    # 3) 디스크 사용률 (임계 초과만 경고)
+    - name: Disk usage check (threshold only)
+      ansible.builtin.set_fact:
+        alerts: "{{ alerts + [ '[DISK] ' ~ m.mount ~ ' ' ~ ((100 - (100.0*m.size_available/m.size_total)) | round(1)) ~ '% used' ] }}"
+      loop: "{{ ansible_facts.mounts | default(ansible_facts.ansible_mounts, true) }}"
+      loop_control:
+        loop_var: m
+      when:
+        - m.fstype is defined
+        - m.fstype not in ['tmpfs','devtmpfs','squashfs']
+        - (100 - (100.0*m.size_available/m.size_total)) | float >= disk_warn_pct
+
+    # 4) 핵심 서비스 상태
+    - name: Check essential services
+      ansible.builtin.shell: "systemctl is-active {{ item }}"
+      register: svc
+      changed_when: false
+      failed_when: false
+      loop: "{{ must_services }}"
+
+    - name: Flag inactive services
+      ansible.builtin.set_fact:
+        alerts: "{{ alerts + [ '[SERVICE] ' ~ item.item ~ ' is ' ~ (item.stdout | default('inactive')) ] }}"
+      loop: "{{ svc.results }}"
+      when: item.rc != 0
+
+    # 4-2) 필수 포트 리슨 상태
+    - name: Check required listening ports (local)
+      ansible.builtin.wait_for:
+        port: "{{ item }}"
+        state: started
+        timeout: 1
+      register: portchk
+      failed_when: false
+      loop: "{{ must_ports }}"
+
+    - name: Flag closed ports
+      ansible.builtin.set_fact:
+        alerts: "{{ alerts + [ '[PORT] ' ~ item.item ~ ' not listening' ] }}"
+      loop: "{{ portchk.results }}"
+      when: (item.state | default('started')) != 'started' or (item.failed | default(false))
+
+  post_tasks:
+    - name: Summary when alerts exist
+      ansible.builtin.debug:
+        msg:
+          - "=== Health Check Summary on {{ inventory_hostname }} ==="
+          - "{{ alerts | unique }}"
+      when: alerts | length > 0
+
+    - name: OK when no alerts
+      ansible.builtin.debug:
+        msg: "=== {{ inventory_hostname }}: All checks passed. ==="
+      when: alerts | length == 0
