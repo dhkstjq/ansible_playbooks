@@ -2,7 +2,7 @@
 - name: 각 노드에 공개키 등록
   hosts: all
   gather_facts: false
-  become: no
+  become: true
 
   vars:
     # 키를 넣을 계정 (인벤토리에 ansible_user가 있으면 그 값 사용)
