@@ -7,29 +7,29 @@
 
   vars:
     # === 임계치 & 점검 대상 변수 ===
-    ssl_targets:            # SSL 만료 확인 대상 (FQDN:PORT)
+    ssl_targets:            # SSL 만료 확인 대상 
       - { host: "wanduri.com", port: 443 }
     ssl_warn_days: 30       # SSL 만료 경고 임계(일)
 
-    disk_warn_pct: 80       # 디스크 사용률 경고 임계(%)
+    disk_warn_pct: 80       # 디스크 사용률 경고 임계
 
-    mem_warn_pct: 90        # Mem 사용률(%)
-    swap_warn_pct: 20       # Swap 사용률(%)
+    mem_warn_pct: 90        # Mem 사용률
+    swap_warn_pct: 20       # Swap 사용률
 
-    load_warn_per_core: 1.0 # 1분 LoadAvg 임계(코어당)
+    load_warn_per_core: 1.0 # 코어 당 처리 할 수 있는 작업
 
     must_services:          # 핵심 서비스 상태 확인
       - sshd
       # - nginx
       # - mariadb
 
-    must_ports:             # 필수 리슨 포트 확인
+    must_ports:             # 필수 포트 리슨 여부
       - 22
       # - 80
       # - 443
 
     log_grep_patterns: '(error|failed|segfault|panic)'
-    log_tail_lines: 500
+    log_tail_lines: 200   #로그 표현 줄 수
 
   pre_tasks:
     - name: Init alert bucket
