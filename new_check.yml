@@ -7,29 +7,28 @@
 
   vars:
     # === 임계치 & 점검 대상 변수 ===
-    ssl_targets:            # SSL 만료 확인 대상 
+    ssl_targets:
       - { host: "wanduri.com", port: 443 }
-    ssl_warn_days: 30       # SSL 만료 경고 임계(일)
+    ssl_warn_days: 30
 
-    disk_warn_pct: 80       # 디스크 사용률 경고 임계
+    disk_warn_pct: 80
+    mem_warn_pct: 90
+    swap_warn_pct: 20
 
-    mem_warn_pct: 90        # Mem 사용률
-    swap_warn_pct: 20       # Swap 사용률
+    load_warn_per_core: 1.0
 
-    load_warn_per_core: 1.0 # 코어 당 처리 할 수 있는 작업
-
-    must_services:          # 핵심 서비스 상태 확인
+    must_services:
       - sshd
       # - nginx
       # - mariadb
 
-    must_ports:             # 필수 포트 리슨 여부
+    must_ports:
       - 22
       # - 80
       # - 443
 
     log_grep_patterns: '(error|failed|segfault|panic)'
-    log_tail_lines: 200   #로그 표현 줄 수
+    log_tail_lines: 200
 
   pre_tasks:
     - name: Init alert bucket
@@ -37,7 +36,7 @@
         alerts: []
 
     - name: Derive core count
-      ansible.builtin.set_fact:
+      ansible.builtin.set_fact: ######################:
         cpu_cores: "{{ (ansible_facts.processor_vcpus | default(ansible_facts.processor_cores*ansible_facts.processor_count, true)) | int }}"
 
   tasks:
@@ -64,7 +63,7 @@
       failed_when: false
       when: ansible_facts.os_family == "Debian"
 
-    # 2) SSL 인증서 만료일
+    # 2) SSL 인증서 만료일 (컨트롤러에서 1회 실행)
     - name: Collect SSL notAfter
       ansible.builtin.shell: |
         set -o pipefail
@@ -76,36 +75,20 @@
       register: ssl_dates
       changed_when: false
       failed_when: false
+      run_once: true
+      delegate_to: localhost
 
-    - name: Evaluate SSL expiries (print)
-      vars:
-        not_after_epoch: >-
-          {{ (item.stdout | to_datetime('%b %d %H:%M:%S %Y %Z')).strftime('%s') }}
-        days_left: >-
-          {{ (((not_after_epoch | int) - (ansible_date_time.epoch | int)) // 86400) | int }}
-      when:
-        - item.stdout is defined
-        - item.stdout | length > 0
-        - (days_left | int) <= (ssl_warn_days | int)
-      ansible.builtin.debug:
-        msg: "⚠️ {{ item.item.host }}: expires in {{ days_left | int }} days"
-      loop: "{{ ssl_dates.results | selectattr('stdout','defined') | list }}"
-
-    - name: Flag expiring certs into alerts
-      vars:
-        not_after_epoch: >-
-          {{ (item.stdout | to_datetime('%b %d %H:%M:%S %Y %Z')).strftime('%s') }}
-        days_left: >-
-          {{ (((not_after_epoch | int) - (ansible_date_time.epoch | int)) // 86400) | int }}
-      when:
-        - item.stdout is defined
-        - item.stdout | length > 0
-        - (days_left | int) <= (ssl_warn_days | int)
+    - name: Accumulate SSL notAfter (raw string)
       ansible.builtin.set_fact:
-        alerts: "{{ alerts + [ '[SSL] ' ~ item.item.host ~ ':' ~ item.item.port ~ ' expires in ' ~ (days_left | int) ~ ' days' ] }}"
+        alerts: "{{ alerts + [ '[SSL] ' ~ item.item.host ~ ':' ~ item.item.port ~ ' notAfter=' ~ (item.stdout | trim) ] }}"
       loop: "{{ ssl_dates.results | selectattr('stdout','defined') | list }}"
+      when:
+        - item.stdout is defined
+        - item.stdout | length > 0
+      run_once: true
+      delegate_to: localhost
 
-    # 3) 디스크 사용률 / inode 사용률
+    # 3) 디스크 사용률
     - name: Disk usage check via ansible_mounts
       ansible.builtin.set_fact:
         alerts: "{{ alerts + [ '[DISK] ' ~ m.mount ~ ' at ' ~ ((100 - (100.0*m.size_available/m.size_total)) | round(1) ) ~ '% used' ] }}"
@@ -116,7 +99,6 @@
         - m.fstype is defined
         - m.fstype not in ['tmpfs','devtmpfs','squashfs']
         - (100 - (100.0*m.size_available/m.size_total)) | float >= disk_warn_pct
-
 
     # 4) 메모리/Swap 사용률
     - name: Memory/Swap usage compute
@@ -171,42 +153,19 @@
       failed_when: false
       loop: "{{ must_ports }}"
 
-    - name: Flag closed ports
+    - name: Flag open ports (optional)
       ansible.builtin.set_fact:
-        alerts: "{{ alerts + [ '[PORT] ' ~ item.item ~ ' not listening' ] }}"
+        alerts: "{{ alerts + [ '[PORT] ' ~ item.item ~ ' is listening' ] }}"
       loop: "{{ portchk.results }}"
-      when: (item.state | default('started')) != 'started' or (item.failed | default(false))
+      when: (item.state | default('started')) == 'started'
 
-    # 8) 최근 로그 에러 스캔 (/var/log/messages, dmesg or journal)
-    - name: Tail messages (if exists)
-      ansible.builtin.shell: "test -f /var/log/messages && tail -n {{ log_tail_lines }} /var/log/messages | egrep -i '{{ log_grep_patterns }}' || true"
-      register: msglog
-      changed_when: false
 
-    - name: Scan dmesg recent errors
-      ansible.builtin.shell: "dmesg --ctime | tail -n {{ log_tail_lines }} | egrep -i '{{ log_grep_patterns }}' || true"
-      register: dmesglog
-      changed_when: false
-
-    - name: Scan journalctl sshd errors (if systemd)
-      ansible.builtin.shell: "command -v journalctl >/dev/null 2>&1 && journalctl -u sshd -n {{ log_tail_lines }} | egrep -i '{{ log_grep_patterns }}' || true"
-      register: journ
-      changed_when: false
-
-    - name: Flag log errors (condensed)
-      ansible.builtin.set_fact:
-        alerts: "{{ alerts + ['[LOG] Recent errors found in system logs'] }}"
-      when: >
-        (msglog.stdout | default('')) | length > 0
-        or (dmesglog.stdout | default('')) | length > 0
-        or (journ.stdout | default('')) | length > 0
 
   post_tasks:
-    - name: Summary
+    - name: Summary (alerts present)
       ansible.builtin.debug:
         msg:
           - "=== Health Check Summary on {{ inventory_hostname }} ==="
-          - "OK (no alerts)"
           - "{{ alerts }}"
       when: alerts | length > 0
 
