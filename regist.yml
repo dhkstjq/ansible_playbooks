@@ -17,3 +17,46 @@
         key: "{{ awx_pubkey }}"
         state: present
         manage_dir: true
+
+      # 3. SSH 보안 설정 업데이트
+    #- name: Disable SSH password authentication
+    #  lineinfile:
+    #    path: "/etc/ssh/sshd_config"
+    #    regexp: "^#?PasswordAuthentication"  # ^#?는 라인 시작 부분에 #이 있을 수도, 없을 수도 있음을 의미합니다.
+    #    line: "PasswordAuthentication no"
+    #    create: yes
+    #  notify: Restart SSH #이 태스크가 변경 사항을 만들면, Restart SSH라는 이름의 핸들러를 호출하도록 알립니다.
+
+    #- name: Disable root login via SSH
+    #  lineinfile:
+    #    path: "/etc/ssh/sshd_config"
+    #    regexp: "^#?PermitRootLogin"
+    #    line: "PermitRootLogin no"
+    #    create: yes
+    #  notify: Restart SSH
+
+    # 4. SSH 재시작
+    - name: Restart SSH service
+      service:
+        name: sshd
+        state: restarted
+      when: ansible_facts['os_family'] == 'RedHat'
+
+    - name: Restart OpenSSH service (for Debian/Ubuntu)
+      service:
+        name: ssh
+        state: restarted
+      when: ansible_facts['os_family'] == 'Debian'
+
+  handlers:
+    - name: Restart SSH
+      service:
+        name: sshd
+        state: restarted
+      when: ansible_facts['os_family'] == 'RedHat'
+
+    - name: Restart OpenSSH
+      service:
+        name: ssh
+        state: restarted
+      when: ansible_facts['os_family'] == 'Debian'
